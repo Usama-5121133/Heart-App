@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Heart Disease Risk Predictor</title>
+  <style>
+    :root { --bg:#f4f6f8; --card:#fff; --text:#1f2933; --muted:#6b7785; --line:#d5dbe1; --accent:#d6336c; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, Arial, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px 16px; }
+    .card { max-width: 860px; margin: auto; background: var(--card); padding: 28px; border-radius: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+    fieldset { border: 1px solid var(--line); border-radius: 10px; margin: 0 0 18px; padding: 14px 16px 18px; }
+    legend { font-weight: 600; font-size: 14px; padding: 0 8px; color: var(--accent); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .card { padding: 18px; } }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .unit { font-weight: 400; color: var(--muted); font-size: 12px; }
+    input, select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; background: #fff; }
+    input:focus, select:focus { outline: 2px solid #f3b0c8; border-color: var(--accent); }
+    .desc { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
+    .normal { font-size: 12px; color: #2b6cb0; margin-top: 3px; line-height: 1.4; }
+    .actions { display: flex; gap: 10px; }
+    button { padding: 13px; border: 0; border-radius: 8px; font-size: 16px; cursor: pointer; }
+    #predictBtn { flex: 1; background: var(--accent); color: #fff; }
+    #predictBtn:disabled { opacity: .6; cursor: wait; }
+    #resetBtn { background: #e9ecef; color: var(--text); padding: 13px 20px; }
+    #result { margin-top: 20px; display: none; }
+    .summary { padding: 18px; border-radius: 10px; }
+    .summary.low { background: #d3f9d8; color: #1b6e2d; }
+    .summary.moderate { background: #fff3bf; color: #7a5b00; }
+    .summary.high { background: #ffe3e3; color: #a61e1e; }
+    .summary.err { background: #fff3bf; color: #7a5b00; }
+    .summary h2 { margin: 0 0 6px; font-size: 20px; }
+    .bar { height: 12px; background: rgba(0,0,0,.12); border-radius: 6px; overflow: hidden; margin-top: 10px; }
+    .bar > div { height: 100%; background: currentColor; width: 0; transition: width .5s; }
+    h3 { font-size: 15px; margin: 22px 0 8px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: #f8f9fa; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .pill.normal { background: #d3f9d8; color: #1b6e2d; }
+    .pill.borderline { background: #fff3bf; color: #7a5b00; }
+    .pill.high { background: #ffe3e3; color: #a61e1e; }
+    .pill.low { background: #dbe4ff; color: #364fc7; }
+    .pill.info { background: #e9ecef; color: #495057; }
+    ul.flags { margin: 6px 0 0; padding-left: 20px; font-size: 14px; }
+    .disclaimer { color: var(--muted); font-size: 12px; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Heart Disease Risk Predictor</h1>
+    <p class="sub">Enter the patient details below. Each field shows what it means and its normal range.</p>
+
+    <form id="form" novalidate>
+      <fieldset><legend>Personal details</legend><div class="grid" id="personal"></div></fieldset>
+      <fieldset><legend>Clinical measurements</legend><div class="grid" id="clinical"></div></fieldset>
+      <fieldset><legend>Lifestyle</legend><div class="grid" id="lifestyle"></div></fieldset>
+      <fieldset><legend>Medical history and symptoms</legend><div class="grid" id="history"></div></fieldset>
+
+      <div class="actions">
+        <button type="submit" id="predictBtn">Predict</button>
+        <button type="button" id="resetBtn">Reset</button>
+      </div>
+    </form>
+
+    <div id="result" role="status"></div>
+    <p class="disclaimer">For educational purposes only. Reference ranges are general guidelines. This is not a medical diagnosis.</p>
+  </div>
+
+<script>
+  // Which features go in which section. All details (label, unit, normal range,
+  // description, options) come from the backend via /api/schema.
+  const SECTIONS = {
+    personal:  ["Age", "Gender"],
+    clinical:  ["Cholesterol", "Blood Pressure", "Heart Rate", "Blood Sugar"],
+    lifestyle: ["Smoking", "Alcohol Intake", "Exercise Hours", "Stress Level"],
+    history:   ["Family History", "Diabetes", "Obesity", "Exercise Induced Angina", "Chest Pain Type"],
+  };
+
+  let schema = null;
+
+  function numericField(name, f) {
+    return `<div>
+      <label for="f-${name}">${f.label} <span class="unit">(${f.unit})</span></label>
+      <input type="number" name="${name}" id="f-${name}"
+             min="${f.min}" max="${f.max}" step="${f.step}" value="${f.default}" required>
+      <div class="desc">${f.desc}</div>
+      <div class="normal">Normal: ${f.normal}</div>
+      <div class="normal">Dataset range: ${f.dataset_min} to ${f.dataset_max}</div>
+    </div>`;
+  }
+
+  function categoricalField(name, f) {
+    const opts = f.options.map(o => `<option value="${o}">${o}</option>`).join("");
+    return `<div>
+      <label for="f-${name}">${f.label}</label>
+      <select name="${name}" id="f-${name}">${opts}</select>
+      <div class="desc">${f.desc}</div>
+    </div>`;
+  }
+
+  async function buildForm() {
+    const res = await fetch("/api/schema");
+    schema = await res.json();
+    for (const [sectionId, names] of Object.entries(SECTIONS)) {
+      document.getElementById(sectionId).innerHTML = names.map(n =>
+        schema.numeric[n] ? numericField(n, schema.numeric[n])
+                          : categoricalField(n, schema.categorical[n])
+      ).join("");
+    }
+  }
+
+  function showResult(html) {
+    const out = document.getElementById("result");
+    out.innerHTML = html;
+    out.style.display = "block";
+    out.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function renderReport(r) {
+    const msg = r.prediction === 1
+      ? "The model predicts heart disease is likely."
+      : "The model predicts heart disease is unlikely.";
+
+    const rows = r.numeric_report.map(x => `
+      <tr>
+        <td>${x.label}</td>
+        <td>${x.value} ${x.unit}</td>
+        <td>${x.normal}</td>
+        <td><span class="pill ${x.status}">${x.note}</span></td>
+      </tr>`).join("");
+
+    const flags = r.risk_factors.length
+      ? `<ul class="flags">${r.risk_factors.map(f => `<li>${f}</li>`).join("")}</ul>`
+      : `<p style="font-size:14px;margin:6px 0 0">None of the yes/no or lifestyle risk factors were flagged.</p>`;
+
+    return `
+      <div class="summary ${r.level.toLowerCase()}">
+        <h2>${r.level} risk: ${r.probability}%</h2>${msg}
+        <div class="bar"><div style="width:${r.probability}%"></div></div>
+      </div>
+      <h3>Your values vs normal ranges</h3>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Feature</th><th>Your value</th><th>Normal range</th><th>Status</th></tr>
+          ${rows}
+        </table>
+      </div>
+      <h3>Risk factors flagged</h3>
+      ${flags}
+      <h3>Chest pain type</h3>
+      <p style="font-size:14px;margin:6px 0 0">${r.chest_pain}</p>`;
+  }
+
+  document.getElementById("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("predictBtn");
+    const data = Object.fromEntries(new FormData(e.target).entries());
+
+    btn.disabled = true;
+    btn.textContent = "Predicting...";
+    try {
+      const res = await fetch("/api/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const r = await res.json();
+      if (r.error) {
+        showResult(`<div class="summary err"><h2>Check your input</h2>${r.error}</div>`);
+      } else {
+        showResult(renderReport(r));
+      }
+    } catch (err) {
+      showResult(`<div class="summary err"><h2>Connection problem</h2>Could not reach the server.</div>`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Predict";
+    }
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    buildForm();
+    document.getElementById("result").style.display = "none";
+  });
+
+  buildForm();
+</script>
+</body>
+</html>
